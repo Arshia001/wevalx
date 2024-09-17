@@ -189,7 +189,13 @@ impl Rewrite {
                                     out_func_idx += 1;
                                 }
                             }
-                            ty => anyhow::bail!("import type {:?} not supported", ty),
+                            ty => {
+                                out_imports.import(
+                                    import.module,
+                                    import.name,
+                                    crate::translate::import(ty),
+                                );
+                            }
                         }
                     }
 

@@ -15,6 +15,7 @@ mod intrinsics;
 mod liveness;
 mod state;
 mod stats;
+mod translate;
 mod value;
 
 const STUBS: &'static str = include_str!("../lib/weval-stubs.wat");
@@ -97,8 +98,8 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn wizen(raw_bytes: Vec<u8>, preopens: Vec<PathBuf>, init_func: String) -> anyhow::Result<Vec<u8>> {
-    let mut w = wizer::Wizer::new();
-    w.allow_wasi(true)?;
+    let mut w = wizex::Wizex::new();
+    w.allow_wasix(true)?;
     w.init_func(init_func);
     w.inherit_env(true);
     for preopen in preopens {

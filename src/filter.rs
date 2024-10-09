@@ -471,6 +471,18 @@ impl Rewrite {
                     false
                 }
 
+                Payload::StartSection { func, .. } => {
+                    match self.func_remap.get(&func) {
+                        Some(f) => {
+                            out.section(&wasm_encoder::StartSection {
+                                function_index: f.as_index()?,
+                            });
+                        }
+                        None => panic!("Start function doesn't exist in the module"),
+                    }
+                    false
+                }
+
                 Payload::CustomSection(reader) => match reader.as_known() {
                     KnownCustom::Name(name_reader) => {
                         let mut names = wasm_encoder::NameSection::new();

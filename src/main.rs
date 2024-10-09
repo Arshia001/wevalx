@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+use anyhow::Context;
 use std::path::PathBuf;
 use structopt::StructOpt;
 
@@ -97,17 +98,22 @@ fn main() -> anyhow::Result<()> {
     }
 }
 
-fn wizen(raw_bytes: Vec<u8>, preopens: Vec<PathBuf>, init_func: String) -> anyhow::Result<Vec<u8>> {
+fn make_wizex(preopens: &[PathBuf], init_func: &str) -> wizex::Wizex {
     let mut w = wizex::Wizex::new();
-    w.allow_wasix(true)?;
+    w.allow_wasix(true);
     w.init_func(init_func);
     w.inherit_env(true);
     for preopen in preopens {
-        w.dir(&preopen);
+        w.dir(preopen);
     }
     w.wasm_bulk_memory(true);
-    w.preload_bytes("weval", STUBS.as_bytes().to_vec())?;
-    w.func_rename("_start", "wizer.resume");
+    w.preload_bytes("weval", STUBS.as_bytes().to_vec());
+    w
+}
+
+fn wizen(raw_bytes: Vec<u8>, preopens: &[PathBuf], init_func: &str) -> anyhow::Result<Vec<u8>> {
+    let mut w = make_wizex(preopens, init_func);
+    w.func_rename("_start", "wizex.resume");
     w.run(&raw_bytes[..])
 }
 
@@ -145,10 +151,12 @@ pub fn weval(
         if verbose {
             eprintln!("Wizening the module with its input...");
         }
-        wizen(raw_bytes, preopens, init_func)?
+        wizen(raw_bytes, &preopens, &init_func)?
     } else {
         raw_bytes
     };
+
+    let wizex = make_wizex(&preopens, &init_func);
 
     // Load module.
     if verbose {
@@ -162,7 +170,15 @@ pub fn weval(
     if verbose {
         eprintln!("Building memory image...");
     }
-    let mut im = image::build_image(&module, None)?;
+    let mut im = {
+        let instance = wizex.instantiate_module(&module_bytes)?;
+        image::build_image(
+            &module,
+            &instance.store,
+            &instance.instance,
+            &instance.imported_memories,
+        )?
+    };
 
     // Collect directives.
     let directives = directive::collect(&module, &mut im)?;
@@ -191,11 +207,10 @@ pub fn weval(
         &cache,
     )?;
 
-    // Update memories in module.
-    if verbose {
-        eprintln!("Updatimg memory image...");
+    // Clear the memory segments, we don't need them.
+    for mem_id in im.memories.keys() {
+        result.module.memories[*mem_id].segments.clear();
     }
-    image::update(&mut result.module, &im);
 
     log::debug!("Final module:\n{}", result.module.display());
 
@@ -240,6 +255,25 @@ pub fn weval(
         eprintln!("Performing post-filter pass to remove intrinsics...");
     }
     let bytes = filter::filter(&bytes[..])?;
+
+    let bytes = {
+        let mut cx = wizex
+            .parse_module(&bytes)
+            .context("Failed to parse rewritten module")?;
+        let instance = wizex
+            .instantiate_module(&bytes)
+            .context("Failed to instantiate rewritten module")?;
+        let snapshot = im.to_wizex_snapshot();
+        let has_wasix_init_memory = wizex.has_wasix_init_memory(&cx);
+        wizex
+            .rewrite_module(
+                &mut cx,
+                &snapshot,
+                wizex.has_wasix_initialize(&instance),
+                has_wasix_init_memory,
+            )
+            .context("Failed to rewrite module with a memory snapshot")?
+    };
 
     if verbose {
         eprintln!("Writing output file...");
